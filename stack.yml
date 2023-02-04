@@ -1,0 +1,167 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Daily Tag Report Email - Antoine Cichowicz | Github: Yris Ops'
+
+Parameters:
+  EmailAddress:
+    Type: String
+    Description: The email address to receive the tag report
+    
+  Event:
+    Type: String
+    Description: The time when the report is sent
+    Default: "cron(0 0 * * ? *)"
+
+Resources:
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - 'sts:AssumeRole'
+          Principal:
+            Service:
+            - 'lambda.amazonaws.com'
+      Path: /
+      ManagedPolicyArns: 
+        - "arn:aws:iam::aws:policy/ReadOnlyAccess"
+      Policies:
+      - PolicyName: 'lambda-execution-policy'
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action: sns:Publish
+            Resource: !Ref SNSTopicDailyTagLambda
+
+  SNSTopicDailyTagLambda:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      DisplayName: 'Tag Report SNS Topic'
+      Subscription:
+        - Endpoint: !Ref EmailAddress
+          Protocol: email
+
+  DailyTagReportLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Timeout: 300
+      Code:
+        ZipFile: |
+          import boto3
+
+          SNSTopicDailyTagLambdaArn = "<TopicDailyTagLambdaSNS>"
+
+          def lambda_handler(event, context):
+              report = generate_tag_report()
+              return report
+
+          def count_tags(response, tag_count_dict):
+              for resource in response:
+                  for tag in resource.get('Tags', []):
+                      key = tag['Key']
+                      value = tag.get('Value', '')
+                      if key not in tag_count_dict:
+                          tag_count_dict[key] = {'count': 1, 'values': [value]}
+                      else:
+                          tag_count_dict[key]['count'] += 1
+                          tag_count_dict[key]['values'].append(value)
+              return tag_count_dict
+
+          def create_tag_report(tag_count, tag_type):
+              report = f"\n{tag_type} Tag Report:\n"
+              for tag in tag_count:
+                  report += f"- {tag}: {tag_count[tag]['count']}\n"
+                  report += f"  values: {', '.join(tag_count[tag]['values'])}\n"
+              return report
+
+          def generate_tag_report():
+              # Initialize the AWS resource clients
+              sns = boto3.client('sns', region_name='us-east-1')
+              ec2 = boto3.client('ec2')
+              elbv2 = boto3.client('elbv2')   
+              
+              # Dictionaries to store the tag counts for each resource type
+              ec2_tag_count = {}
+              security_group_tag_count = {}
+              volume_tag_count = {}
+              key_pair_tag_count = {}
+              load_balancer_tag_count = {}
+              
+              # Generate EC2 tag report
+              response = ec2.describe_instances()
+              for reservation in response['Reservations']:
+                  for instance in reservation['Instances']:
+                      for tag in instance['Tags']:
+                          key = tag['Key']
+                          value = tag.get('Value', '')
+                          if key not in ec2_tag_count:
+                              ec2_tag_count[key] = {'count': 1, 'values': [value]}
+                          else:
+                              ec2_tag_count[key]['count'] += 1
+                              ec2_tag_count[key]['values'].append(value)
+                              
+              security_group_tag_count = count_tags(ec2.describe_security_groups()['SecurityGroups'], security_group_tag_count)
+              volume_tag_count = count_tags(ec2.describe_volumes()['Volumes'], volume_tag_count)
+              key_pair_tag_count = count_tags(ec2.describe_key_pairs()['KeyPairs'], key_pair_tag_count)
+              
+              response = elbv2.describe_load_balancers()
+              for load_balancer in response['LoadBalancers']:
+                  if load_balancer['LoadBalancerName'] not in load_balancer_tag_count:
+                      load_balancer_tag_count[load_balancer['LoadBalancerName']] = 1
+                  else:
+                      load_balancer_tag_count[load_balancer['LoadBalancerName']] += 1
+
+              # Format the tag report
+              report = "EC2 Tag Report:\n"
+              for tag in ec2_tag_count:
+                  report += f"- {tag}: {ec2_tag_count[tag]['count']}\n"
+                  report += f"  values: {', '.join(ec2_tag_count[tag]['values'])}\n"
+              
+              report += create_tag_report(security_group_tag_count, "Security Group")
+              report += create_tag_report(volume_tag_count, "EBS Volume")
+              report += create_tag_report(key_pair_tag_count, "EC2 Key Pair")
+              
+              report += "\nLoad Balancer Report:\n"
+              for load_balancer_name in load_balancer_tag_count:
+                  report += f"- {load_balancer_name}: {load_balancer_tag_count[load_balancer_name]}\n"
+                  
+              report += "\nhttps://github.com/Yris-ops\n"
+              response = sns.publish(
+              TopicArn=SNSTopicDailyTagLambdaArn,
+              Message=report,
+              Subject='Daily Tags Report'
+          )
+              return report
+
+      Handler: 'index.lambda_handler'
+      Role: !GetAtt "LambdaExecutionRole.Arn"
+      Runtime: 'python3.8'
+
+  EventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: DailyTagReportEventRule
+      ScheduleExpression: Ref !Event
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt [DailyTagReportLambda, Arn]
+          Id: DailyTagReportEventTarget
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt DailyTagReportLambda.Arn
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt EventRule.Arn
+
+Outputs:
+  TopicDailyTagLambdaSNS: 
+    Description: Arn for SNS topic related to alarms
+    Export:
+      Name: !Sub '${AWS::StackName}-SNSTopicDailyTagReport'
+    Value: !Ref SNSTopicDailyTagLambda
