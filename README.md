@@ -13,19 +13,13 @@ The purpose of this template is to create a set of AWS resources that generate a
 
 - EmailAddress: The email address to receive the tag report.
 
-## Prerequisites
-
-- SNSTopicArn: An SNS Topic that will receive the tag report and send it to the specified email address.
-
 ## Usage
 
 1. Open the AWS CloudFormation console.
 1. Create a new stack and upload the stack.yml file.
 1. Enter the desired email address in the EmailAddress parameter.
 1. Click on the "Create stack" button to deploy the resources.
-1. Obtain the ARN of the SNS topic created earlier.
-1. Modify the code of the Lambda function, specifically the TopicDailyTagLambdaSNS value to include the ARN obtained.
-1. Save, Deploy, Test and Enjoy.
+1. Test the DailyTagReportLambda Function and Enjoy.
 
 ## Supported Resources
 

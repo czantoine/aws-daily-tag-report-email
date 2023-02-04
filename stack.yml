@@ -48,12 +48,16 @@ Resources:
   DailyTagReportLambda:
     Type: 'AWS::Lambda::Function'
     Properties:
+      Environment:
+        Variables:
+          TopicDailyTagLambdaSNS: !Ref SNSTopicDailyTagLambda
       Timeout: 300
       Code:
         ZipFile: |
           import boto3
+          import os
 
-          SNSTopicDailyTagLambdaArn = "<TopicDailyTagLambdaSNS>"
+          SNSTopicDailyTagLambdaArn = (os.environ['TopicDailyTagLambdaSNS'])
 
           def lambda_handler(event, context):
               report = generate_tag_report()
@@ -145,7 +149,7 @@ Resources:
     Type: AWS::Events::Rule
     Properties:
       Name: DailyTagReportEventRule
-      ScheduleExpression: Ref !Event
+      ScheduleExpression: !Ref Event
       State: "ENABLED"
       Targets:
         - Arn: !GetAtt [DailyTagReportLambda, Arn]
